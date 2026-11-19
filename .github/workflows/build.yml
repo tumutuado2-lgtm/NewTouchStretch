@@ -1,0 +1,89 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      # Aceita o projeto de duas formas:
+      #  1) arquivos soltos no repositório (settings.gradle.kts na raiz), ou
+      #  2) um .zip do projeto enviado pelo navegador do celular (é extraído aqui).
+      - name: Localizar o projeto
+        id: locate
+        shell: bash
+        run: |
+          set -e
+          shopt -s nullglob
+          if [ ! -f settings.gradle.kts ]; then
+            zips=(*.zip)
+            if [ ${#zips[@]} -eq 0 ]; then
+              echo "::error::Não encontrei settings.gradle.kts nem um arquivo .zip do projeto na raiz do repositório."
+              exit 1
+            fi
+            echo "Extraindo ${zips[0]} ..."
+            mkdir -p _src
+            unzip -q "${zips[0]}" -d _src
+          fi
+          SETTINGS=$(find . -name settings.gradle.kts -not -path './.git/*' -print -quit)
+          ROOT=$(dirname "$SETTINGS")
+          echo "Projeto em: $ROOT"
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Instalar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Instalar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Aceitar licenças do Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Compilar APK (release)
+        working-directory: ${{ steps.locate.outputs.root }}
+        env:
+          NTS_VERSION_CODE: ${{ github.run_number }}
+          NTS_VERSION_NAME: 1.0.${{ github.run_number }}
+        run: gradle --no-daemon :app:assembleRelease
+
+      - name: Preparar o arquivo do APK
+        shell: bash
+        run: |
+          set -e
+          mkdir -p out
+          cp "${{ steps.locate.outputs.root }}/app/build/outputs/apk/release/app-release.apk" \
+             "out/New-Touch-Stretch-v1.0.${{ github.run_number }}.apk"
+          ls -la out
+
+      - name: Guardar o APK como artefato do build
+        uses: actions/upload-artifact@v4
+        with:
+          name: New-Touch-Stretch-APK
+          path: out/*.apk
+
+      - name: Publicar em Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: New Touch Stretch v1.0.${{ github.run_number }}
+          body: |
+            APK do **New Touch Stretch** (build ${{ github.run_number }}).
+
+            Baixe o arquivo `.apk` abaixo, instale no celular e siga o tutorial do README
+            (é preciso o app Shizuku para o efeito funcionar).
+          files: out/*.apk
+          
